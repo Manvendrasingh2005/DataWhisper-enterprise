@@ -1,205 +1,170 @@
 import json
-import sqlparse
+import time
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.db import connection
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-def is_safe_sql(sql):
-    """
-    Core Security Sandbox:
-    1. Parses the raw SQL string.
-    2. Blocks multiple chained statements (prevents SQL injection via ';').
-    3. Strictly enforces that the query is a SELECT statement.
-    """
-    parsed = sqlparse.parse(sql)
-    
-    # 1. Prevent multiple chained statements (e.g., "SELECT * FROM users; DROP TABLE users;")
-    if len(parsed) > 1:
-        return False, "Multiple SQL statements are not allowed."
-        
-    if not parsed:
-        return False, "No valid SQL found."
-        
-    statement = parsed[0]
-    
-    # 2. Extract the core command type (SELECT, DROP, UPDATE, etc.)
-    command_type = statement.get_type()
-    
-    # 3. Whitelist ONLY 'SELECT' commands
-    if command_type != 'SELECT':
-        return False, f"Security Violation: '{command_type}' commands are strictly blocked. Only SELECT is allowed."
-        
-    return True, "Safe"
-
-@csrf_exempt # Used for local development to allow React to hit this endpoint
-def execute_sql(request):
-    if request.method == 'POST':
-        try:
-            # Extract the raw SQL from the incoming React request
-            data = json.loads(request.body)
-            raw_sql = data.get('query', '').strip()
-            
-            if not raw_sql:
-                return JsonResponse({'error': 'No query provided'}, status=400)
-                
-            # Run the query through our security vault
-            is_safe, message = is_safe_sql(raw_sql)
-            if not is_safe:
-                return JsonResponse({'error': f'Blocked by Security Middleware: {message}'}, status=403)
-                
-            # If safe, execute the query against the database
-            with connection.cursor() as cursor:
-                cursor.execute(raw_sql)
-                
-                # Extract column names dynamically so React can build table headers
-                columns = [col[0] for col in cursor.description]
-                rows = cursor.fetchall()
-                
-                # Zip columns and rows together into a clean JSON array
-                results = [dict(zip(columns, row)) for row in rows]
-                
-            return JsonResponse({
-                'status': 'success',
-                'columns': columns,
-                'rows': results
-            })
-            
-        except Exception as e:
-            # Catch bad table names, bad syntax, etc.
-            return JsonResponse({'error': str(e)}, status=500)
-            
-    return JsonResponse({'error': 'Method not allowed. Use POST.'}, status=405)
-
-import os
-import google.generativeai as genai
-from dotenv import load_dotenv
-
-# Load the secret API key from the .env file
-load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Define the blueprint of your database to teach the AI
-DATABASE_SCHEMA_MAP = """
-You are a senior SQL data engineer. Translate the question into a highly accurate, optimized SQL SELECT statement for SQLite.
-
-Schema:
-Table: api_supplier
-- id (integer, pk)
-- name (varchar)
-- contact_email (varchar)
-- country (varchar)
-
-Table: api_user
-- id (integer, pk)
-- name (varchar)
-- email (varchar)
-- city (varchar)
-- status (varchar) -> 'active' or 'churned'
-
-Table: api_product
-- id (integer, pk)
-- title (varchar)
-- category (varchar)
-- sku (varchar)
-- cost_price (numeric) -> wholesale cost
-- selling_price (numeric) -> what the customer pays
-- stock_count (integer)
-- supplier_id (integer, fk to api_supplier.id)
-
-Table: api_order
-- id (integer, pk)
-- user_id (integer, fk to api_user.id)
-- order_date (timestamp)
-- total_amount (numeric)
-- status (varchar) -> 'completed' or 'cancelled'
-
-Table: api_orderitem
-- id (integer, pk)
-- order_id (integer, fk to api_order.id)
-- product_id (integer, fk to api_product.id)
-- quantity (integer)
-- price_per_unit (numeric)
-
-Table: api_payment
-- id (integer, pk)
-- order_id (integer, fk to api_order.id, unique)
-- payment_method (varchar) -> 'Credit Card', 'UPI', 'PayPal', 'NetBanking'
-- transaction_id (varchar)
-- gateway_response (varchar) -> 'SUCCESS', 'FAILED'
-- processed_at (timestamp)
-
-Table: api_inventorylog
-- id (integer, pk)
-- product_id (integer, fk to api_product.id)
-- movement_type (varchar) -> 'IN', 'OUT'
-- quantity (integer)
-- logged_at (timestamp)
-
-CRITICAL RULES:
-1. Return ONLY the raw SQL string (no markdown, no backticks).
-2. Only write SELECT commands.
-3. THERE IS NO "price" COLUMN. If asked about "price", "expensive", or "cheapest", ALWAYS use the "selling_price" column.
-4. To calculate profit margins, use (selling_price - cost_price).
-5. BUSINESS DEFINITION: If a user asks about "low stock", assume that means a stock_count of less than 50.
-"""
+from .security import is_safe_sql
+from .schema_inspector import introspect_schema
+from .ai_engine import (
+    generate_sql,
+    heal_sql,
+    generate_insights_and_visualization
+)
 
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def ask_ai(request):
     """
-    Takes natural language, asks Gemini for SQL, validates it, and executes it.
+    Main Conversational Natural Language to SQL Endpoint.
+    Translates questions, self-heals syntax errors, validates security,
+    executes queries, and synthesizes executive insights and chart recommendations.
     """
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            user_question = data.get('question', '').strip()
-            
-            if not user_question:
-                return JsonResponse({'error': 'Please provide a question.'}, status=400)
+    start_time = time.perf_counter()
+    try:
+        data = json.loads(request.body)
+        user_question = data.get('question', '').strip()
+        history = data.get('history', [])
 
-            # 1. Ask Gemini to write the SQL
-            model = genai.GenerativeModel('gemini-3.5-flash')
-            prompt = f"{DATABASE_SCHEMA_MAP}\n\nUser Question: {user_question}\nSQL Query:"
-            
-            response = model.generate_content(prompt)
-            generated_sql = response.text.strip()
-            
-            # Remove rogue markdown blocks if the AI disobeys rule 2
-            if generated_sql.startswith("```sql"):
-                generated_sql = generated_sql[6:-3].strip()
-            elif generated_sql.startswith("```"):
-                generated_sql = generated_sql[3:-3].strip()
+        if not user_question:
+            return JsonResponse({'error': 'Please provide a question.'}, status=400)
 
-            # 2. Pass the AI's SQL through your security vault!
-            is_safe, message = is_safe_sql(generated_sql)
-            if not is_safe:
+        # 1. Generate initial SQL via AI Engine
+        generated_sql, model_name = generate_sql(user_question, history=history)
+
+        # 2. Run through AST Security Sandbox
+        is_safe, message = is_safe_sql(generated_sql)
+        if not is_safe:
+            return JsonResponse({
+                'error': f'Query blocked by Security Middleware: {message}',
+                'sql': generated_sql
+            }, status=403)
+
+        # 3. Execution & Self-Healing Loop
+        columns = []
+        results = []
+        was_healed = False
+        max_retries = 2
+        current_sql = generated_sql
+
+        for attempt in range(max_retries + 1):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(current_sql)
+                    if cursor.description:
+                        columns = [col[0] for col in cursor.description]
+                        rows = cursor.fetchall()
+                        results = [dict(zip(columns, row)) for row in rows]
+                    else:
+                        columns = []
+                        results = []
+                # If we get here, execution succeeded!
+                break
+            except Exception as db_err:
+                if attempt < max_retries:
+                    # Trigger Self-Healing Loop
+                    try:
+                        healed_sql = heal_sql(current_sql, str(db_err), user_question)
+                        safe_healed, heal_msg = is_safe_sql(healed_sql)
+                        if safe_healed:
+                            current_sql = healed_sql
+                            was_healed = True
+                            continue
+                    except Exception:
+                        pass
+                # If retries exhausted or healing failed
                 return JsonResponse({
-                    'error': f'AI generated an unsafe query. Blocked: {message}',
-                    'sql': generated_sql
-                }, status=403)
+                    'error': f"Database execution error: {str(db_err)}",
+                    'sql': current_sql
+                }, status=500)
 
-            # 3. Execute the safe query
-            with connection.cursor() as cursor:
-                cursor.execute(generated_sql)
+        execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        # 4. Generate AI Business Insight & Chart Recommendation
+        insight, suggested_chart = generate_insights_and_visualization(
+            user_question, current_sql, columns, results
+        )
+
+        return JsonResponse({
+            'status': 'success',
+            'question': user_question,
+            'sql': current_sql,
+            'columns': columns,
+            'rows': results,
+            'row_count': len(results),
+            'insight': insight,
+            'suggested_chart': suggested_chart,
+            'execution_time_ms': execution_time_ms,
+            'healed': was_healed,
+            'model': model_name
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'error': str(e)}, status=500)
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def execute_raw_sql(request):
+    """
+    SQL Workbench Runner.
+    Allows developers & analysts to edit and run custom SQL safely.
+    """
+    start_time = time.perf_counter()
+    try:
+        data = json.loads(request.body)
+        raw_sql = data.get('query', '').strip()
+
+        if not raw_sql:
+            return JsonResponse({'error': 'No SQL query provided.'}, status=400)
+
+        # Validate through security sandbox
+        is_safe, message = is_safe_sql(raw_sql)
+        if not is_safe:
+            return JsonResponse({'error': f'Security Block: {message}'}, status=403)
+
+        with connection.cursor() as cursor:
+            cursor.execute(raw_sql)
+            if cursor.description:
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchall()
                 results = [dict(zip(columns, row)) for row in rows]
+            else:
+                columns = []
+                results = []
 
-            # Return the English question, the generated SQL, and the actual data!
-            return JsonResponse({
-                'status': 'success',
-                'question': user_question,
-                'sql': generated_sql,
-                'columns': columns,
-                'rows': results
-            })
+        execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc() # <--- THIS LINE PRINTS THE ERROR TO YOUR TERMINAL
-            return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({
+            'status': 'success',
+            'sql': raw_sql,
+            'columns': columns,
+            'rows': results,
+            'row_count': len(results),
+            'execution_time_ms': execution_time_ms
+        })
 
-    return JsonResponse({'error': 'Method not allowed.'}, status=405)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_database_schema(request):
+    """
+    Returns active database tables and column definitions for the frontend Schema Explorer.
+    """
+    try:
+        schema = introspect_schema()
+        return JsonResponse({
+            'status': 'success',
+            'vendor': schema['vendor'],
+            'tables': schema['tables']
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

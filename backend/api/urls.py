@@ -2,6 +2,7 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # This now perfectly matches your views.py function!
-    path('ask/', views.ask_ai, name='ask'), 
+    path('ask/', views.ask_ai, name='ask'),
+    path('execute-raw/', views.execute_raw_sql, name='execute_raw'),
+    path('schema/', views.get_database_schema, name='schema'),
 ]
