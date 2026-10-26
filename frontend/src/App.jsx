@@ -4,7 +4,8 @@ import {
   LineChart as LineIcon, PieChart as PieIcon, Table as TableIcon,
   Download, Sparkles, ChevronRight, Lock, User, LogOut,
   History, Play, CheckCircle2, X, FileJson,
-  Layers, ArrowUpRight, TrendingUp, ShieldAlert, Cpu
+  Layers, ArrowUpRight, TrendingUp, ShieldAlert, Cpu,
+  Server, Link as LinkIcon, Unlink
 } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area,
@@ -26,6 +27,13 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+
+  // --- External DB Connection State ---
+  const [activeDbUri, setActiveDbUri] = useState(() => localStorage.getItem('active_db_uri') || '');
+  const [showDbModal, setShowDbModal] = useState(false);
+  const [inputDbUri, setInputDbUri] = useState(activeDbUri);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   // --- Query & Dashboard State ---
   const [prompt, setPrompt] = useState('');
@@ -125,6 +133,7 @@ export default function App() {
     setResults(null);
     setShowHistory(false);
     setShowSchema(false);
+    setShowDbModal(false);
   };
 
   // Fetch Database Schema
@@ -132,7 +141,10 @@ export default function App() {
     if (!token) return;
     setSchemaLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/schema/`, {
+      const url = activeDbUri
+        ? `${API_BASE_URL}/api/schema/?db_uri=${encodeURIComponent(activeDbUri)}`
+        : `${API_BASE_URL}/api/schema/`;
+      const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.status === 401) {
@@ -152,6 +164,52 @@ export default function App() {
   const handleOpenSchema = () => {
     setShowSchema(true);
     if (!schemaData) fetchSchema();
+  };
+
+  // Test External DB Connection
+  const handleTestConnection = async () => {
+    if (!inputDbUri.trim()) return;
+    setTestingConnection(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/test-db/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ db_uri: inputDbUri.trim() })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        setTestResult({ success: true, ...data });
+      } else {
+        setTestResult({ success: false, error: data.error || 'Connection failed' });
+      }
+    } catch (err) {
+      setTestResult({ success: false, error: err.message });
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  // Apply External DB Connection
+  const handleApplyConnection = () => {
+    const trimmed = inputDbUri.trim();
+    setActiveDbUri(trimmed);
+    localStorage.setItem('active_db_uri', trimmed);
+    setSchemaData(null);
+    setShowDbModal(false);
+  };
+
+  // Reset to Default Demo DB
+  const handleResetConnection = () => {
+    setActiveDbUri('');
+    setInputDbUri('');
+    localStorage.removeItem('active_db_uri');
+    setTestResult(null);
+    setSchemaData(null);
+    setShowDbModal(false);
   };
 
   // Main Ask Function (Natural Language to SQL)
@@ -181,7 +239,8 @@ export default function App() {
         },
         body: JSON.stringify({
           question: textToSearch,
-          history: historyPayload
+          history: historyPayload,
+          db_uri: activeDbUri || undefined
         }),
       });
 
@@ -236,7 +295,10 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ query: editableSql }),
+        body: JSON.stringify({
+          query: editableSql,
+          db_uri: activeDbUri || undefined
+        }),
       });
 
       const data = await response.json();
@@ -427,6 +489,21 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            {/* Database Switcher Button */}
+            <button
+              onClick={() => { setInputDbUri(activeDbUri); setTestResult(null); setShowDbModal(true); }}
+              className={`flex items-center gap-1.5 text-xs px-3.5 py-2 rounded-xl border transition-all shadow-sm ${
+                activeDbUri
+                  ? 'bg-indigo-950/50 border-indigo-500/40 text-indigo-300'
+                  : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+              }`}
+              title="Connect external PostgreSQL or SQLite database"
+            >
+              <Server className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{activeDbUri ? 'Custom DB' : 'Default DB'}</span>
+              <span className={`w-2 h-2 rounded-full ${activeDbUri ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+            </button>
+
             <button
               onClick={handleOpenSchema}
               className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 px-3.5 py-2 rounded-xl border border-slate-800 transition-all shadow-sm"
@@ -628,7 +705,7 @@ export default function App() {
 
                 <button
                   onClick={downloadCSV}
-                  className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl border border-slate-700 transition-all"
+                  className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl border border-slate-700 transition-all cursor-pointer"
                   title="Export raw data as CSV"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -637,7 +714,7 @@ export default function App() {
 
                 <button
                   onClick={downloadJSON}
-                  className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl border border-slate-700 transition-all"
+                  className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-xl border border-slate-700 transition-all cursor-pointer"
                   title="Export raw data as JSON"
                 >
                   <FileJson className="w-3.5 h-3.5" />
@@ -849,14 +926,14 @@ export default function App() {
                     <button
                       onClick={() => setTablePage(p => Math.max(1, p - 1))}
                       disabled={tablePage === 1}
-                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors"
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors cursor-pointer"
                     >
                       Prev
                     </button>
                     <button
                       onClick={() => setTablePage(p => Math.min(totalPages, p + 1))}
                       disabled={tablePage === totalPages}
-                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors"
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg transition-colors cursor-pointer"
                     >
                       Next
                     </button>
@@ -880,7 +957,7 @@ export default function App() {
             </div>
             <button
               onClick={() => setShowHistory(false)}
-              className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+              className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -917,7 +994,7 @@ export default function App() {
           {queryHistory.length > 0 && (
             <button
               onClick={() => setQueryHistory([])}
-              className="mt-4 w-full py-2 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-red-400 text-xs rounded-xl transition-colors border border-slate-700/50"
+              className="mt-4 w-full py-2 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-red-400 text-xs rounded-xl transition-colors border border-slate-700/50 cursor-pointer"
             >
               Clear History
             </button>
@@ -935,13 +1012,13 @@ export default function App() {
                 <div>
                   <h3 className="font-bold text-white text-base">Database Schema Explorer</h3>
                   <p className="text-xs text-slate-400">
-                    Engine: <span className="uppercase text-emerald-400 font-mono">{schemaData?.vendor || 'SQL'}</span> • Introspected application tables
+                    Engine: <span className="uppercase text-emerald-400 font-mono">{schemaData?.vendor || 'SQL'}</span> • {activeDbUri ? 'Connected to External DB' : 'Default Enterprise DB'}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setShowSchema(false)}
-                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -977,6 +1054,118 @@ export default function App() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* External Database Connection Modal */}
+      {showDbModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <Server className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <h3 className="font-bold text-white text-base">Connect External Database</h3>
+                  <p className="text-xs text-slate-400">Query your own PostgreSQL or SQLite database</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDbModal(false)}
+                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Database Connection URI</label>
+                <input
+                  type="text"
+                  value={inputDbUri}
+                  onChange={(e) => setInputDbUri(e.target.value)}
+                  placeholder="postgresql://user:password@host:5432/dbname"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500/60 rounded-xl p-3 text-xs text-slate-200 font-mono placeholder:text-slate-600 focus:outline-none"
+                />
+              </div>
+
+              {/* Sample URI Pills */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] text-slate-500">Supported Connection Formats:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-400">
+                    postgresql://username:password@host:port/database
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-400">
+                    sqlite:///path/to/database.db
+                  </span>
+                </div>
+              </div>
+
+              {/* Test Connection Button */}
+              <button
+                onClick={handleTestConnection}
+                disabled={testingConnection || !inputDbUri.trim()}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-750 disabled:opacity-50 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 border border-slate-700 transition-colors cursor-pointer"
+              >
+                {testingConnection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />}
+                <span>Test Connectivity</span>
+              </button>
+
+              {/* Test Result Display */}
+              {testResult && (
+                <div className={`p-3.5 rounded-xl text-xs border ${
+                  testResult.success
+                    ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
+                    : 'bg-red-950/30 border-red-500/40 text-red-300'
+                }`}>
+                  {testResult.success ? (
+                    <div className="space-y-1">
+                      <p className="font-semibold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        Connection Successful!
+                      </p>
+                      <p className="text-[11px] text-slate-300">
+                        Vendor: <span className="uppercase font-mono text-emerald-400">{testResult.vendor}</span> • Found <span className="font-bold">{testResult.table_count}</span> tables.
+                      </p>
+                      {testResult.tables && (
+                        <p className="text-[10px] text-slate-400 truncate">
+                          Tables: {testResult.tables.join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                      <span>{testResult.error}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Modal Actions */}
+              <div className="pt-2 flex items-center gap-2">
+                <button
+                  onClick={handleApplyConnection}
+                  disabled={!inputDbUri.trim()}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
+                >
+                  Connect & Use Database
+                </button>
+
+                {activeDbUri && (
+                  <button
+                    onClick={handleResetConnection}
+                    className="py-3 px-3.5 bg-slate-800 hover:bg-red-950/40 text-slate-300 hover:text-red-400 border border-slate-700 hover:border-red-900/50 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                    title="Switch back to default bundled demo database"
+                  >
+                    <Unlink className="w-3.5 h-3.5" />
+                    <span>Reset to Default</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
