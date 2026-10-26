@@ -13,6 +13,32 @@ from .ai_engine import (
     heal_sql,
     generate_insights_and_visualization
 )
+from .db_connector import (
+    test_external_connection,
+    introspect_external_schema,
+    execute_external_query
+)
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def test_db_connection(request):
+    """
+    Validates external database connection URI (PostgreSQL or SQLite).
+    """
+    try:
+        data = json.loads(request.body)
+        db_uri = data.get('db_uri', '').strip()
+        if not db_uri:
+            return JsonResponse({'error': 'Please provide a db_uri connection string.'}, status=400)
+
+        result = test_external_connection(db_uri)
+        if result.get('success'):
+            return JsonResponse({'status': 'success', **result})
+        else:
+            return JsonResponse({'error': result.get('error', 'Connection failed')}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
 
 @csrf_exempt
 @api_view(['POST'])
@@ -21,13 +47,14 @@ def ask_ai(request):
     """
     Main Conversational Natural Language to SQL Endpoint.
     Translates questions, self-heals syntax errors, validates security,
-    executes queries, and synthesizes executive insights and chart recommendations.
+    executes queries (locally or on external DB), and synthesizes executive insights.
     """
     start_time = time.perf_counter()
     try:
         data = json.loads(request.body)
         user_question = data.get('question', '').strip()
         history = data.get('history', [])
+        db_uri = data.get('db_uri', '').strip() or None
 
         if not user_question:
             return JsonResponse({'error': 'Please provide a question.'}, status=400)
@@ -52,16 +79,20 @@ def ask_ai(request):
 
         for attempt in range(max_retries + 1):
             try:
-                with connection.cursor() as cursor:
-                    cursor.execute(current_sql)
-                    if cursor.description:
-                        columns = [col[0] for col in cursor.description]
-                        rows = cursor.fetchall()
-                        results = [dict(zip(columns, row)) for row in rows]
-                    else:
-                        columns = []
-                        results = []
-                # If we get here, execution succeeded!
+                if db_uri:
+                    # Execute on external database with read-only constraint
+                    columns, results = execute_external_query(db_uri, current_sql)
+                else:
+                    # Execute on default application database
+                    with connection.cursor() as cursor:
+                        cursor.execute(current_sql)
+                        if cursor.description:
+                            columns = [col[0] for col in cursor.description]
+                            rows = cursor.fetchall()
+                            results = [dict(zip(columns, row)) for row in rows]
+                        else:
+                            columns, results = [], []
+                # If reached here, execution succeeded!
                 break
             except Exception as db_err:
                 if attempt < max_retries:
@@ -75,7 +106,6 @@ def ask_ai(request):
                             continue
                     except Exception:
                         pass
-                # If retries exhausted or healing failed
                 return JsonResponse({
                     'error': f"Database execution error: {str(db_err)}",
                     'sql': current_sql
@@ -119,6 +149,7 @@ def execute_raw_sql(request):
     try:
         data = json.loads(request.body)
         raw_sql = data.get('query', '').strip()
+        db_uri = data.get('db_uri', '').strip() or None
 
         if not raw_sql:
             return JsonResponse({'error': 'No SQL query provided.'}, status=400)
@@ -128,15 +159,17 @@ def execute_raw_sql(request):
         if not is_safe:
             return JsonResponse({'error': f'Security Block: {message}'}, status=403)
 
-        with connection.cursor() as cursor:
-            cursor.execute(raw_sql)
-            if cursor.description:
-                columns = [col[0] for col in cursor.description]
-                rows = cursor.fetchall()
-                results = [dict(zip(columns, row)) for row in rows]
-            else:
-                columns = []
-                results = []
+        if db_uri:
+            columns, results = execute_external_query(db_uri, raw_sql)
+        else:
+            with connection.cursor() as cursor:
+                cursor.execute(raw_sql)
+                if cursor.description:
+                    columns = [col[0] for col in cursor.description]
+                    rows = cursor.fetchall()
+                    results = [dict(zip(columns, row)) for row in rows]
+                else:
+                    columns, results = [], []
 
         execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
@@ -153,14 +186,29 @@ def execute_raw_sql(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 @csrf_exempt
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def get_database_schema(request):
     """
-    Returns active database tables and column definitions for the frontend Schema Explorer.
+    Returns database tables and column definitions for the frontend Schema Explorer.
+    Supports either default DB or external db_uri.
     """
     try:
-        schema = introspect_schema()
+        db_uri = None
+        if request.method == 'POST':
+            try:
+                data = json.loads(request.body)
+                db_uri = data.get('db_uri', '').strip() or None
+            except Exception:
+                pass
+        else:
+            db_uri = request.GET.get('db_uri', '').strip() or None
+
+        if db_uri:
+            schema = introspect_external_schema(db_uri)
+        else:
+            schema = introspect_schema()
+
         return JsonResponse({
             'status': 'success',
             'vendor': schema['vendor'],
