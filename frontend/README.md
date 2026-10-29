@@ -1,16 +1,53 @@
-# React + Vite
+# DataWhisper Frontend Client 💻
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The frontend client for **DataWhisper Enterprise** is a high-performance single-page analytics application built with **React 19**, **Vite 8**, **Tailwind CSS v4**, and **Recharts**.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🌟 Key Features
 
-## React Compiler
+- **Conversational Query Bar**: Real-time natural language query dispatch with loading indicators and categorized business query suggestion pills.
+- **Dynamic Multi-Chart Suite**: Automatically renders the best visual chart (KPI Metric Card, Bar Chart, Line Chart, Area Chart, Donut / Pie Chart, or Interactive Table), with a **View As Switcher** allowing manual toggles anytime.
+- **Interactive SQL Workbench**: Collapsible monospace SQL editor allowing live query modification, query execution duration telemetry (`⚡ X ms`), and row counters.
+- **AI Executive Takeaways**: Top insight banner highlighting key business takeaways and auto-healed indicators.
+- **Multi-Database Switcher**: Connect to external PostgreSQL or SQLite databases with live connectivity ping and schema introspection.
+- **Schema Explorer**: Modal displaying active database tables, column names, and data types.
+- **Query History Drawer**: Session-persistent query drawer tracking duration, row counts, and one-click replay.
+- **Instant Data Export**: One-click client-side CSV and JSON downloads.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the Oxlint configuration
+## 🛠️ Setup & Running
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+### 1. Install Dependencies
+```bash
+npm install
+```
+
+### 2. Configure Environment
+Create `.env` using `.env.example`:
+```ini
+VITE_API_URL=http://127.0.0.1:8000
+```
+
+### 3. Start Development Server
+```bash
+npm run dev
+```
+The frontend will start at `http://localhost:5173`.
+
+---
+
+## 📦 Build & Linting
+
+### Build for Production:
+```bash
+npm run build
+```
+Generates an optimized client bundle in `./dist`.
+
+### Run Linter:
+```bash
+npm run lint
+```
+Uses `oxlint` for high-speed static code verification.
