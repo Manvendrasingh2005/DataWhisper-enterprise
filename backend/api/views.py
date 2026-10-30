@@ -111,12 +111,12 @@ def ask_ai(request):
                     'sql': current_sql
                 }, status=500)
 
-        execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
         # 4. Generate AI Business Insight & Chart Recommendation
         insight, suggested_chart = generate_insights_and_visualization(
             user_question, current_sql, columns, results
         )
+
+        execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
         return JsonResponse({
             'status': 'success',
