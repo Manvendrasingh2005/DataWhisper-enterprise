@@ -55,9 +55,16 @@ Content-Type: application/json
 
 ## 2. Natural Language Query Endpoint
 
-### 2.1 Ask AI
+### 2.1 Ask AI (Natural Language Query Pipeline)
 - **Endpoint**: `POST /api/ask/`
-- **Description**: Converts a natural language question into SQL, runs security validation, executes the query, auto-heals any syntax errors, and synthesizes executive insights and visualization recommendations.
+- **Description**: Converts a natural language question into dialect-specific SQL, verifies AST security constraints, executes the query, triggers self-healing on errors, and computes instant analytical insights and visualization recommendations.
+- **Latency SLA**: ~1.0s end-to-end via speculative hedged execution (`gemini-3.1-flash-lite` ⚔️ `gemini-3.5-flash`).
+
+#### Request Headers
+```http
+Authorization: Bearer <your_access_token>
+Content-Type: application/json
+```
 
 #### Request Body
 ```json
@@ -74,32 +81,64 @@ Content-Type: application/json
 ```
 *Note: `history` and `db_uri` are optional.*
 
+#### cURL Example
+```bash
+curl -X POST http://127.0.0.1:8000/api/ask/ \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show top 5 highest selling products"}'
+```
+
 #### Success Response (`200 OK`)
 ```json
 {
   "status": "success",
-  "question": "What is the total revenue of all completed orders?",
-  "sql": "SELECT SUM(total_amount) FROM api_order WHERE LOWER(status) = 'completed'",
-  "columns": ["SUM(total_amount)"],
+  "question": "Show top 5 highest selling products",
+  "sql": "SELECT p.title, SUM(oi.quantity) AS total_sold FROM api_product p JOIN api_orderitem oi ON p.id = oi.product_id GROUP BY p.id ORDER BY total_sold DESC LIMIT 5",
+  "columns": ["title", "total_sold"],
   "rows": [
-    {
-      "SUM(total_amount)": 199352.93
-    }
+    { "title": "27-inch IPS 144Hz Monitor", "total_sold": 48 },
+    { "title": "4K Ultra HD OLED TV", "total_sold": 45 },
+    { "title": "Wireless Mechanical Keyboard", "total_sold": 35 }
   ],
-  "row_count": 1,
-  "insight": "The total revenue generated from all completed orders stands at $199,352.93.",
-  "suggested_chart": "metric_card",
-  "execution_time_ms": 142.5,
+  "row_count": 3,
+  "insight": "27-inch IPS 144Hz Monitor leads total sold with 48 units (37.5% share across top results).",
+  "suggested_chart": "pie_chart",
+  "execution_time_ms": 1010.23,
   "healed": false,
-  "model": "gemini-3.5-flash"
+  "model": "gemini-3.1-flash-lite"
 }
 ```
 
+#### Response Fields:
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `status` | `string` | `"success"` or `"error"` |
+| `question` | `string` | Echo of user's original natural language prompt |
+| `sql` | `string` | Synthesized and validated SQL SELECT statement |
+| `columns` | `list[string]` | Ordered column names returned by database cursor |
+| `rows` | `list[dict]` | Array of key-value row mappings |
+| `row_count` | `integer` | Count of returned records |
+| `insight` | `string` | High-fidelity executive business takeaway (0.01ms analytical synthesis) |
+| `suggested_chart` | `string` | Recommends `metric_card`, `bar_chart`, `line_chart`, `pie_chart`, or `table` |
+| `execution_time_ms`| `float` | Full end-to-end server pipeline duration in milliseconds |
+| `healed` | `boolean` | `true` if query underwent self-healing retry repair |
+| `model` | `string` | Winning AI model identifier from the speculative hedged race |
+
 #### Security Rejection Response (`403 Forbidden`)
+Returned when the AST Security Sandbox detects unauthorized tables, multiple statements, or prohibited DDL/DML keywords:
 ```json
 {
   "error": "Query blocked by Security Middleware: Security Violation: Access to system table 'auth_user' is strictly prohibited.",
   "sql": "SELECT * FROM auth_user"
+}
+```
+
+#### Standard Error Response (`400 Bad Request` / `500 Server Error`)
+```json
+{
+  "error": "Database execution error: no such column: non_existent_column",
+  "sql": "SELECT non_existent_column FROM api_order"
 }
 ```
 
