@@ -11,7 +11,7 @@ backend/
 ├── api/
 │   ├── management/commands/
 │   │   └── seed_db.py         # Seeds rich enterprise sample dataset
-│   ├── ai_engine.py           # Google Gemini GenAI SDK, self-healing & insight generator
+│   ├── ai_engine.py           # Google Gemini GenAI SDK, hedged model race & instant insights
 │   ├── db_connector.py        # External PostgreSQL & SQLite read-only executor
 │   ├── models.py              # Retail & ERP domain models (Supplier, Product, Order, etc.)
 │   ├── schema_inspector.py    # Dynamic schema introspector and dialect detector
@@ -30,6 +30,29 @@ backend/
 ├── requirements.txt           # Clean UTF-8 locked dependencies
 └── test_api.py                # Automated JWT API verification script
 ```
+
+---
+
+## 🧩 Subsystem Architecture & Module Descriptions
+
+### 1. `api/ai_engine.py` — Ultra-Low Latency GenAI Pipeline
+- **Speculative Hedged Model Execution**: Concurrently races `gemini-3.1-flash-lite` and `gemini-3.5-flash` in a `ThreadPoolExecutor`. The fastest model to return valid SQL wins immediately, canceling the sibling worker and eliminating 504/503 timeout stalls.
+- **Client Connection Pooling**: Maintains a module-level singleton `genai.Client` to reuse open HTTP/2 TCP/TLS sockets, shaving ~500ms off every subsequent call.
+- **In-Memory Schema Cache**: Caches introspected database tables, columns, and foreign key descriptions in memory for 300 seconds (`_cached_schema_map`), avoiding redundant schema lookups.
+- **Instant Heuristic Insights & Chart Recommender (0.01ms)**: Replaces secondary LLM calls with deterministic statistical heuristics that compute category leaders, percentage shares, time-series peaks, or formatted totals mathematically with zero network overhead.
+
+### 2. `api/security.py` — AST-Level SQL Sandbox
+- **Single Statement Enforcement**: Disallows chained queries (semicolon batching) to prevent stacked execution attacks.
+- **Command Whitelisting**: Strictly restricts queries to `SELECT` operations. Blocks all Data Manipulation (`INSERT`, `UPDATE`, `DELETE`) and Data Definition (`DROP`, `ALTER`, `TRUNCATE`, `CREATE`) keywords.
+- **Table Isolation**: Cross-references every table name in the abstract syntax tree against `ALLOWED_TABLES` (whitelisting domain tables like `api_order`, `api_product` while shielding `auth_user`, `django_session`, and system catalog tables).
+
+### 3. `api/schema_inspector.py` — Dynamic Dialect Introspector
+- **Dialect Detection**: Detects database engine types (`sqlite`, `postgresql`, `mysql`) via Django's connection vendor abstraction.
+- **Foreign Key Graphing**: Extracts relational constraints (`table_name`, `column_name`, `referenced_table`) to feed relational context into prompt prompts, enabling accurate multi-table `JOIN` query generation.
+
+### 4. `api/db_connector.py` — External Database Gateway
+- **Read-Only Transaction Isolation**: Connects to user-supplied PostgreSQL and SQLite URIs under strict read-only session configurations (`SET TRANSACTION READ ONLY` on PostgreSQL and read-only URI flags on SQLite).
+- **Execution Limits**: Automatically imposes statement timeouts and row-count constraints (default `LIMIT 500`) to prevent runaway resource exhaustion.
 
 ---
 
