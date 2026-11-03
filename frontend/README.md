@@ -17,6 +17,42 @@ The frontend client for **DataWhisper Enterprise** is a high-performance single-
 
 ---
 
+## 🎨 UI Component Hierarchy & Architecture
+
+```text
+src/
+├── App.jsx                     # Core orchestrator: state management, routing, & layouts
+├── main.jsx                    # Application entry point with React 19 root
+├── index.css                   # Tailwind CSS v4 styling rules & custom animations
+└── components/ (Modular Blocks inside App.jsx)
+    ├── AuthOverlay             # JWT login & session validation modal
+    ├── HeaderNav               # Brand identity, database status pill, & user actions
+    ├── QueryInputSection       # Natural language input, prompt suggestions, & submission
+    ├── ExecutiveInsightBanner  # High-priority business takeaway & self-healing badge
+    ├── VisualAnalyticsEngine   # Multi-chart switcher & Recharts visualizer
+    │   ├── MetricCardView      # Single aggregate value, label, and trend direction
+    │   ├── BarChartView        # Categorical distribution with hover tooltips
+    │   ├── LineChartView       # Time-series trendlines with Cartesian grids
+    │   ├── AreaChartView       # Volume accumulation with gradient fills
+    │   ├── PieChartView        # Proportional market share with auto-colored legends
+    │   └── InteractiveTable    # Sortable, paginated, responsive data table
+    ├── SQLWorkbenchDrawer      # Monospace SQL code viewer, editor, & raw execution
+    ├── ExternalDatabaseModal   # Multi-DB connection string tester & switcher
+    ├── SchemaExplorerModal     # Interactive catalog of tables, fields, and types
+    └── QueryHistoryDrawer      # Persistent timeline of prior questions & execution times
+```
+
+---
+
+## 🔄 Client State Management Flow
+
+1. **Authentication State**: Access and refresh tokens are stored in browser memory, automatically injected as `Authorization: Bearer <token>` headers on all API requests.
+2. **Active Database State**: When connected to an external PostgreSQL or SQLite database, `activeDbUri` is stored in React state and bundled into `/api/ask/` and `/api/execute-raw/` payloads.
+3. **Optimistic Loading & Telemetry**: Query submission immediately activates animated skeleton loaders, updates history with a pending timestamp, and captures total client-side roundtrip latency alongside server-reported pipeline duration.
+4. **Export Engine**: Zero-latency client-side file synthesis using native browser `Blob` and `URL.createObjectURL` APIs, supporting CSV (with RFC 4180 escaping) and formatted JSON.
+
+---
+
 ## 🛠️ Setup & Running
 
 ### 1. Install Dependencies
